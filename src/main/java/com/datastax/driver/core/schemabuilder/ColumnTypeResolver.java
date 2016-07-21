@@ -4,8 +4,8 @@ import com.datastax.driver.core.DataType;
 import com.datastax.driver.mapping.annotations.UDT;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.InetAddresses;
-import com.sun.istack.internal.NotNull;
 
+import javax.validation.constraints.NotNull;
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;

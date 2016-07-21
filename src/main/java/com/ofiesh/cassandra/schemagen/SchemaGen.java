@@ -4,10 +4,12 @@ import com.datastax.driver.core.DataType;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.schemabuilder.*;
+import com.datastax.driver.mapping.Mapper;
 import com.datastax.driver.mapping.MappingManager;
 import com.datastax.driver.mapping.annotations.*;
 
 import java.lang.reflect.Field;
+import java.security.Key;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -16,30 +18,37 @@ import static com.datastax.driver.core.schemabuilder.ColumnTypeResolver.type;
 public class SchemaGen {
 
     private final Session session;
-    private final DescribeAccessor describeAccessor;
+    private final Mapper<Keyspace> keyspaceMapper;
+    private final Mapper<SchemaType> schemaTypeMapper;
+    private final Mapper<SystemTable> systemTableMapper;
+    private final Mapper<TableColumn> tableColumnMapper;
 
     public SchemaGen(final Session session) {
         this.session = session;
-        describeAccessor = new MappingManager(session).createAccessor(DescribeAccessor.class);
+        MappingManager mappingManager = new MappingManager(session);
+        keyspaceMapper = mappingManager.mapper(Keyspace.class);
+        schemaTypeMapper = mappingManager.mapper(SchemaType.class);
+        systemTableMapper = mappingManager.mapper(SystemTable.class);
+        tableColumnMapper = mappingManager.mapper(TableColumn.class);
     }
 
-    public void generate(String keyspace, Class... entities) {
-        ResultSet schemaKeyspace = describeAccessor.getSchemaKeyspace(keyspace);
-        if(schemaKeyspace.all().size() == 0) {
-            session.execute("CREATE KEYSPACE " + keyspace + " WITH replication " +
-                    "= {'class':'SimpleStrategy', 'replication_factor':3};");
+    public void generate(String keyspaceName, Class... entities) {
+        Keyspace keyspace = keyspaceMapper.get(keyspaceName);
+        if(keyspace == null) {
+            session.execute("CREATE KEYSPACE " + keyspaceName + " WITH replication " +
+                    "= {'class':'SimpleStrategy', 'replication_factor':1};");
         }
 
-        session.execute("USE " + keyspace);
+        session.execute("USE " + keyspaceName);
 
         Collection<String> tableStatements = new ArrayList<>();
         Collection<String> udtStatements = new ArrayList<>();
 
         for (Class entity: entities) {
             if(entity.getDeclaredAnnotation(Table.class) != null) {
-                tableStatements.addAll(generateTable(keyspace, entity));
+                tableStatements.addAll(generateTable(keyspaceName, entity));
             } else if(entity.getDeclaredAnnotation(UDT.class) != null) {
-                udtStatements.addAll(generateUDT(keyspace, entity));
+                udtStatements.addAll(generateUDT(keyspaceName, entity));
             }
         }
 
@@ -54,16 +63,15 @@ public class SchemaGen {
             throw new IllegalArgumentException("Cannot create udt for class with no udt name");
         }
 
-        ResultSet udtResults = describeAccessor.getUDTFields(keyspace, udt.name());
-        if(udtResults.getAvailableWithoutFetching() == 0) {
+        SchemaType type = schemaTypeMapper.get(keyspace, udt.name());
+        if(type == null) {
             return Collections.singleton(createUDT(entity).buildInternal());
         } else {
-            List<String> fieldNames = udtResults.all().get(0).getList("field_names", String.class);
             Collection<String> alterUdts = new ArrayList<>();
             for(Field field : entity.getDeclaredFields()) {
                 String name = SchemaGenHelpers.getFieldName(field);
-                if(!fieldNames.contains(name)) {
-                    alterUdts.add("ALTER TYPE " + udt.name() + " ADD " + name + " " + type(field));
+                if(!type.getFieldNames().contains(name)) {
+                    alterUdts.add("ALTER TYPE " + udt.name() + " ADD " + name + " " + type(field).asCQLString());
                 }
             }
             return alterUdts;
@@ -77,12 +85,12 @@ public class SchemaGen {
             throw new IllegalArgumentException("Cannot create table for class with no table name");
         }
 
-        ResultSet schemaColumnFamily = describeAccessor.getSchemaColumnFamily(keyspace, table.name());
-        if (schemaColumnFamily.all().size() == 0) {
+        SystemTable systemTable = systemTableMapper.get(keyspace, table.name());
+        if (systemTable == null) {
             return Collections.singleton(create(entity).buildInternal());
         } else {
             return Arrays.stream(entity.getDeclaredFields())
-                    .filter(field -> describeAccessor.getSchemaColumn(keyspace, table.name(), getName(field)).getAvailableWithoutFetching() == 0)
+                    .filter(field -> tableColumnMapper.get(keyspace, table.name(), getName(field)) == null)
                     .map(field -> PublicSchemaStatement.buildInternal(addColumn(table.name(), field)))
                     .collect(Collectors.toList());
         }

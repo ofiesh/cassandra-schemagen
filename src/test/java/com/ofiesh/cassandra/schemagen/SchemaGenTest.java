@@ -45,4 +45,12 @@ public class SchemaGenTest {
             schemaGen.generate("testa", Udt.class, EntityComplexKey.class);
         }
     }
+
+    @Test
+    public void testTable() {
+        try(Cluster cluster = Cluster.builder().addContactPoint("localhost").build()) {
+            SchemaGen schemaGen = new SchemaGen(cluster.newSession());
+            schemaGen.generate("testb", Udt.class, Class1.class, EntityComplexKey.class);
+        }
+    }
 }
